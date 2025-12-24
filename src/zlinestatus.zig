@@ -39,7 +39,7 @@ pub fn main() !void {
         else => |e| return e,
     };
     defer connection.close();
-    const conn = connection.connection();
+    const conn = connection.connection;
     const display = connection.getDisplay();
     const registry = try display.get_registry(conn);
     const registry_done = try display.sync(conn);
