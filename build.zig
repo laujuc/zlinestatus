@@ -23,13 +23,14 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(zlinestatus_exe);
 
     // zsendvalue executable
+    const zsendvalue_mod = b.createModule(.{
+        .root_source_file = b.path("src/zsendvalue.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     const zsendvalue_exe = b.addExecutable(.{
         .name = "zsendvalue",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/zsendvalue.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+        .root_module = zsendvalue_mod,
     });
     b.installArtifact(zsendvalue_exe);
 
