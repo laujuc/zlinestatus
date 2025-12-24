@@ -1,0 +1,16 @@
+.{
+    .name = "zlinestatus",
+    .version = "0.0.1",
+    .dependencies = .{
+        .shimizu = .{
+            .url = "https://git.sr.ht/~geemili/shimizu/archive/main.tar.gz",
+            // TODO: Replace with actual hash from `zig fetch`
+            .hash = "1220b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4b4",
+        },
+        .z2d = .{
+            .url = "https://github.com/vancluever/z2d/archive/main.tar.gz",
+            // TODO: Replace with actual hash from `zig fetch`
+            .hash = "1220a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3a3",
+        },
+    },
+}
