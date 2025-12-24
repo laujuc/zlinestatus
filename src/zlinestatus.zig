@@ -68,7 +68,7 @@ pub fn main() !void {
     const size = width * height * 4;
     const fd = try std.posix.memfd_create("buffer", 0);
     try std.posix.ftruncate(fd, size);
-    const pool = try shm.create_pool(conn, @enumFromInt(fd), size);
+    const pool = try shm.create_pool(conn, fd, size);
     defer pool.destroy(conn);
     const buffer = try pool.create_buffer(conn, 0, width, height, width * 4, wayland.wl_shm.Format.argb8888);
     defer buffer.destroy(conn);
@@ -136,8 +136,7 @@ const Globals = struct {
 };
 
 fn bindGlobal(conn: shimizu.Connection, registry: wayland.wl_registry, global: wayland.wl_registry.Event.Global, comptime T: type) !T {
-    const obj_id = try registry.bind(conn, global.name, T.NAME, T.VERSION);
-    return @enumFromInt(@intFromEnum(obj_id));
+    return try registry.bind(conn, global.name, T.NAME, T.VERSION);
 }
 
 fn onRegistryEvent(globals: *Globals, conn: shimizu.Connection, registry: wayland.wl_registry, event: wayland.wl_registry.Event) !void {
