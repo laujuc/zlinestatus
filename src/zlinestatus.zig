@@ -1,5 +1,6 @@
 const std = @import("std");
 const shimizu = @import("shimizu");
+const wayland = shimizu.core;
 const z2d = @import("z2d");
 
 pub fn main() !void {
@@ -33,13 +34,26 @@ pub fn main() !void {
     try std.posix.listen(socket, 1);
 
     // Wayland setup with Shimizu (simplified; in real code, handle events properly)
-    const display = try shimizu.wl_display.connect(null);
-    defer shimizu.wl_display.disconnect(display);
+    var connection = shimizu.posix.Connection.open(allocator, .{}) catch |err| switch (err) {
+        error.XDGRuntimeDirEnvironmentVariableNotFound => return error.NoXdgRuntimeDir,
+        else => |e| return e,
+    };
+    defer connection.close();
+    const conn = connection.connection();
+    const display = connection.getDisplay();
+    const registry = try display.get_registry(conn);
+    const registry_done = try display.sync(conn);
 
-    // Assume compositor and shm are bound (simplified)
-    var compositor: ?*shimizu.wl_compositor = null;
-    var shm: ?*shimizu.wl_shm = null;
-    // TODO: Bind globals from registry
+    var globals = Globals{};
+    var globals_ready = false;
+    try conn.setEventListener(registry, *Globals, onRegistryEvent, &globals);
+    try conn.setEventListener(registry_done, *bool, onWlCallbackSetTrue, &globals_ready);
+    while (!globals_ready) {
+        try connection.recv();
+    }
+
+    const compositor = globals.compositor orelse return error.WlCompositorNotFound;
+    const shm = globals.shm orelse return error.WlShmNotFound;
 
     // Placeholder screen height; in real code, get from wl_output
     const screen_height: u32 = 1080;
@@ -47,17 +61,22 @@ pub fn main() !void {
     const height: u32 = screen_height;
 
     // Create surface
-    const surface = try shimizu.wl_compositor.createSurface(compositor.?);
-    defer shimizu.wl_surface.destroy(surface);
+    const surface = try compositor.create_surface(conn);
+    defer surface.destroy(conn);
 
     // Create shm pool and buffer
     const size = width * height * 4;
     const fd = try std.posix.memfd_create("buffer", 0);
     try std.posix.ftruncate(fd, size);
-    const pool = try shimizu.wl_shm.createPool(shm.?, fd, size);
-    defer shimizu.wl_shm_pool.destroy(pool);
-    const buffer = try shimizu.wl_shm_pool.createBuffer(pool, 0, width, height, width * 4, shimizu.wl_shm.Format.argb8888);
-    defer shimizu.wl_buffer.destroy(buffer);
+    const size_i32 = std.math.cast(i32, size) orelse return error.Overflow;
+    const width_i32 = std.math.cast(i32, width) orelse return error.Overflow;
+    const height_i32 = std.math.cast(i32, height) orelse return error.Overflow;
+    const stride_i32 = std.math.cast(i32, width * 4) orelse return error.Overflow;
+
+    const pool = try shm.create_pool(conn, fd, size_i32);
+    defer pool.destroy(conn);
+    const buffer = try pool.create_buffer(conn, 0, width_i32, height_i32, stride_i32, wayland.wl_shm.Format.argb8888);
+    defer buffer.destroy(conn);
 
     // Map the buffer
     const data = try std.posix.mmap(null, size, std.posix.PROT.READ | std.posix.PROT.WRITE, .{ .TYPE = .SHARED }, fd, 0);
@@ -81,8 +100,8 @@ pub fn main() !void {
     @memcpy(data_slice, pixels_bytes);
 
     // Attach and commit
-    try shimizu.wl_surface.attach(surface, buffer, 0, 0);
-    try shimizu.wl_surface.commit(surface);
+    try surface.attach(conn, buffer, 0, 0);
+    try surface.commit(conn);
 
     // Event loop (simplified; integrate with Wayland dispatch)
     while (true) {
@@ -111,9 +130,35 @@ pub fn main() !void {
         @memcpy(data_slice2, pixels_bytes2);
 
         // Commit
-        try shimizu.wl_surface.attach(surface, buffer, 0, 0);
-        try shimizu.wl_surface.commit(surface);
+        try surface.attach(conn, buffer, 0, 0);
+        try surface.commit(conn);
     }
+}
+
+const Globals = struct {
+    compositor: ?wayland.wl_compositor = null,
+    shm: ?wayland.wl_shm = null,
+};
+
+fn bindGlobal(conn: shimizu.Connection, registry: wayland.wl_registry, global: wayland.wl_registry.Event.Global, comptime T: type) !T {
+    return try registry.bind(conn, global.name, T.NAME, T.VERSION);
+}
+
+fn onRegistryEvent(globals: *Globals, conn: shimizu.Connection, registry: wayland.wl_registry, event: wayland.wl_registry.Event) !void {
+    switch (event) {
+        .global => |global| {
+            if (shimizu.globalMatchesInterface(global, wayland.wl_compositor)) {
+                globals.compositor = try bindGlobal(conn, registry, global, wayland.wl_compositor);
+            } else if (shimizu.globalMatchesInterface(global, wayland.wl_shm)) {
+                globals.shm = try bindGlobal(conn, registry, global, wayland.wl_shm);
+            }
+        },
+        else => {},
+    }
+}
+
+fn onWlCallbackSetTrue(flag: *bool, _: shimizu.Connection, _: wayland.wl_callback, _: wayland.wl_callback.Event) !void {
+    flag.* = true;
 }
 
 fn drawLine(surface: *z2d.Surface, path: *z2d.Path, value: f32, max_height: u32) !void {
