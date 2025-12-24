@@ -1,6 +1,9 @@
 .{
     .name = "zlinestatus",
     .version = "0.0.1",
+    .paths = .{
+        "",
+    },
     .dependencies = .{
         .shimizu = .{
             .url = "https://git.sr.ht/~geemili/shimizu/archive/main.tar.gz",
