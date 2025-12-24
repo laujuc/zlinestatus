@@ -68,9 +68,9 @@ pub fn main() !void {
     const size = width * height * 4;
     const fd = try std.posix.memfd_create("buffer", 0);
     try std.posix.ftruncate(fd, size);
-    const pool = try shm.create_pool(conn, fd, @intCast(i32, size));
+    const pool = try shm.create_pool(conn, fd, @intCast(size));
     defer pool.destroy(conn);
-    const buffer = try pool.create_buffer(conn, 0, @intCast(i32, width), @intCast(i32, height), @intCast(i32, width * 4), wayland.wl_shm.Format.argb8888);
+    const buffer = try pool.create_buffer(conn, 0, @intCast(width), @intCast(height), @intCast(width * 4), wayland.wl_shm.Format.argb8888);
     defer buffer.destroy(conn);
 
     // Map the buffer
