@@ -1,6 +1,8 @@
 .{
-    .name = "zlinestatus",
+    .name = .zlinestatus,
     .version = "0.0.1",
+    .fingerprint = 0x9a3c7deebebc770e,
+    .minimum_zig_version = "0.15.2",
     .paths = .{
         "",
     },

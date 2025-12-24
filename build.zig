@@ -7,23 +7,29 @@ pub fn build(b: *std.Build) void {
     const shimizu_dep = b.dependency("shimizu", .{});
     const z2d_dep = b.dependency("z2d", .{});
 
-    // zlinestatus executable
-    const zlinestatus_exe = b.addExecutable(.{
-        .name = "zlinestatus",
+    const zlinestatus_mod = b.createModule(.{
         .root_source_file = b.path("src/zlinestatus.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{
+            .{ .name = "shimizu", .module = shimizu_dep.module("shimizu") },
+            .{ .name = "z2d", .module = z2d_dep.module("z2d") },
+        },
     });
-    zlinestatus_exe.addModule("shimizu", shimizu_dep.module("shimizu"));
-    zlinestatus_exe.addModule("z2d", z2d_dep.module("z2d"));
+    const zlinestatus_exe = b.addExecutable(.{
+        .name = "zlinestatus",
+        .root_module = zlinestatus_mod,
+    });
     b.installArtifact(zlinestatus_exe);
 
     // zsendvalue executable
     const zsendvalue_exe = b.addExecutable(.{
         .name = "zsendvalue",
-        .root_source_file = b.path("src/zsendvalue.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/zsendvalue.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
     b.installArtifact(zsendvalue_exe);
 
