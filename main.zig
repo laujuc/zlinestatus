@@ -8,19 +8,20 @@ pub fn main() !void {
     const allocator = arena.allocator();
 
     // Get XDG_RUNTIME_DIR
-    const xdg_runtime_dir = std.os.getenv("XDG_RUNTIME_DIR") orelse return error.NoXdgRuntimeDir;
+    const xdg_runtime_dir = std.posix.getenv("XDG_RUNTIME_DIR") orelse return error.NoXdgRuntimeDir;
     const socket_path = try std.fs.path.join(allocator, &[_][]const u8{ xdg_runtime_dir, "line_program.sock" });
 
     // Create Unix socket
-    const socket = try std.os.socket(std.os.AF.UNIX, std.os.SOCK_STREAM, 0);
-    defer std.os.close(socket);
+    const socket = try std.posix.socket(std.posix.AF.UNIX, std.posix.SOCK.STREAM, 0);
+    defer std.posix.close(socket);
 
-    var addr = std.os.sockaddr_un{
+    var addr = std.posix.sockaddr.un{
+        .family = std.posix.AF.UNIX,
         .path = undefined,
     };
-    std.mem.copyForwards(u8, &addr.path, socket_path);
-    try std.os.bind(socket, @ptrCast(*const std.os.sockaddr, &addr), @sizeOf(std.os.sockaddr_un));
-    try std.os.listen(socket, 1);
+    @memcpy(addr.path[0..socket_path.len], socket_path);
+    try std.posix.bind(socket, @ptrCast(&addr), @sizeOf(std.posix.sockaddr.un));
+    try std.posix.listen(socket, 1);
 
     // Wayland setup with Shimizu
     const display = try shimizu.wl_display.connect(null);
@@ -48,16 +49,16 @@ pub fn main() !void {
 
     // Create shm pool and buffer
     const size = width * height * 4; // RGBA
-    const fd = try std.os.memfd_create("buffer", 0);
-    try std.os.ftruncate(fd, size);
+    const fd = try std.posix.memfd_create("buffer", 0);
+    try std.posix.ftruncate(fd, size);
     const pool = try shimizu.wl_shm.createPool(shm.?, fd, size);
     defer shimizu.wl_shm_pool.destroy(pool);
     const buffer = try shimizu.wl_shm_pool.createBuffer(pool, 0, width, height, width * 4, shimizu.wl_shm.Format.argb8888);
     defer shimizu.wl_buffer.destroy(buffer);
 
     // Map the buffer
-    const data = try std.os.mmap(null, size, std.os.PROT_READ | std.os.PROT_WRITE, std.os.MAP_SHARED, fd, 0);
-    defer std.os.munmap(data);
+    const data = try std.posix.mmap(null, size, std.posix.PROT.READ | std.posix.PROT.WRITE, .{ .TYPE = .SHARED }, fd, 0);
+    defer std.posix.munmap(data);
 
     // z2d setup
     var surface_z2d = try z2d.Surface.init(.image_surface_rgba, allocator, width, height);
@@ -72,7 +73,9 @@ pub fn main() !void {
 
     // Copy to buffer
     const pixels = surface_z2d.image_surface.getPixelsAs([]u32);
-    @memcpy(@ptrCast([*]u8, data), @ptrCast([*]const u8, pixels.ptr), size);
+    const data_slice: []u8 = @as([*]u8, @ptrCast(data))[0..size];
+    const pixels_bytes: []const u8 = @as([*]const u8, @ptrCast(pixels.ptr))[0..size];
+    @memcpy(data_slice, pixels_bytes);
 
     // Attach and commit
     try shimizu.wl_surface.attach(surface, buffer, 0, 0);
@@ -84,14 +87,14 @@ pub fn main() !void {
         try shimizu.wl_display.dispatch(display);
 
         // Check socket
-        var client_addr: std.os.sockaddr_un = undefined;
-        var addr_len: std.os.socklen_t = @sizeOf(std.os.sockaddr_un);
-        const client = std.os.accept(socket, @ptrCast(*std.os.sockaddr, &client_addr), &addr_len) catch continue;
-        defer std.os.close(client);
+        var client_addr: std.posix.sockaddr.un = undefined;
+        var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.un);
+        const client = std.posix.accept(socket, @ptrCast(&client_addr), &addr_len, 0) catch continue;
+        defer std.posix.close(client);
 
         // Read float
         var buf: [64]u8 = undefined;
-        const len = try std.os.recv(client, &buf, 0);
+        const len = try std.posix.recv(client, &buf, 0);
         if (len > 0) {
             const str = buf[0..len];
             value = try std.fmt.parseFloat(f32, std.mem.trim(u8, str, &std.ascii.whitespace));
@@ -100,7 +103,9 @@ pub fn main() !void {
 
         // Update drawing
         try drawLine(&surface_z2d, &path, value, height);
-        @memcpy(@ptrCast([*]u8, data), @ptrCast([*]const u8, pixels.ptr), size);
+        const data_slice2: []u8 = @as([*]u8, @ptrCast(data))[0..size];
+        const pixels_bytes2: []const u8 = @as([*]const u8, @ptrCast(pixels.ptr))[0..size];
+        @memcpy(data_slice2, pixels_bytes2);
 
         // Commit
         try shimizu.wl_surface.attach(surface, buffer, 0, 0);
@@ -109,7 +114,7 @@ pub fn main() !void {
 }
 
 fn drawLine(surface: *z2d.Surface, path: *z2d.Path, value: f32, max_height: u32) !void {
-    const draw_height = @floatToInt(u32, @intToFloat(f32, max_height) * value);
+    const draw_height = @as(u32, @intFromFloat(@as(f32, @floatFromInt(max_height)) * value));
     path.clear();
     try path.addRectangle(0, max_height - draw_height, 4, draw_height);
     surface.clear(0x00000000); // transparent
