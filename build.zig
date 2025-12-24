@@ -10,7 +10,7 @@ pub fn build(b: *std.Build) void {
     // zlinestatus executable
     const zlinestatus_exe = b.addExecutable(.{
         .name = "zlinestatus",
-        .root_source_file = .{ .path = "src/zlinestatus.zig" },
+        .root_source_file = b.path("src/zlinestatus.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -21,7 +21,7 @@ pub fn build(b: *std.Build) void {
     // zsendvalue executable
     const zsendvalue_exe = b.addExecutable(.{
         .name = "zsendvalue",
-        .root_source_file = .{ .path = "src/zsendvalue.zig" },
+        .root_source_file = b.path("src/zsendvalue.zig"),
         .target = target,
         .optimize = optimize,
     });
