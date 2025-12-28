@@ -1,15 +1,33 @@
 const std = @import("std");
-const shimizu = @import("shimizu");
-const wayland = shimizu.core;
-const z2d = @import("z2d");
+const wayland = @import("wayland");
+const wl = wayland.wl;
+const xdg = wayland.xdg;
+const Buffer = wayland.shm.Buffer;
+
+const App = struct {
+    shm: ?wl.Shm = null,
+    compositor: ?wl.Compositor = null,
+    wm_base: ?xdg.WmBase = null,
+    running: bool = true,
+    width: u31 = 4,
+    height: u31 = 300,
+    value: f32 = 0.0,
+    client: *wayland.Client,
+};
+
+const SurfaceCtx = struct {
+    app: *App,
+    wl_surface: wl.Surface,
+    xdg_surface: xdg.Surface,
+    xdg_toplevel: xdg.Toplevel,
+};
 
 pub fn main() !void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer std.debug.assert(gpa.deinit() == .ok);
+    const allocator = gpa.allocator();
 
-    // Parse args: -type <type>
-    const args = std.process.argsAlloc(allocator) catch return error.OutOfMemory;
+    const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
     if (args.len < 3 or !std.mem.eql(u8, args[1], "-type")) {
         std.debug.print("Usage: zlinestatus -type <type>\n", .{});
@@ -17,154 +35,176 @@ pub fn main() !void {
     }
     const type_arg = args[2];
 
-    // Get XDG_RUNTIME_DIR
     const xdg_runtime_dir = std.posix.getenv("XDG_RUNTIME_DIR") orelse return error.NoXdgRuntimeDir;
     const socket_path = try std.fmt.allocPrint(allocator, "{s}/zlinestatus-{s}.sock", .{ xdg_runtime_dir, type_arg });
 
-    // Create Unix socket
+    std.posix.unlink(socket_path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+
     const socket = try std.posix.socket(std.posix.AF.UNIX, std.posix.SOCK.STREAM, 0);
     defer std.posix.close(socket);
 
-    var addr = std.posix.sockaddr.un{
+    var addr: std.posix.sockaddr.un = .{
         .family = std.posix.AF.UNIX,
         .path = undefined,
     };
+    if (socket_path.len >= addr.path.len) return error.SocketPathTooLong;
+    @memset(addr.path[0..], 0);
     @memcpy(addr.path[0..socket_path.len], socket_path);
     try std.posix.bind(socket, @ptrCast(&addr), @sizeOf(std.posix.sockaddr.un));
-    try std.posix.listen(socket, 1);
+    try std.posix.listen(socket, 8);
 
-    // Wayland setup with Shimizu (simplified; in real code, handle events properly)
-    var connection = shimizu.posix.Connection.open(allocator, .{}) catch |err| switch (err) {
-        error.XDGRuntimeDirEnvironmentVariableNotFound => return error.NoXdgRuntimeDir,
-        else => |e| return e,
+    const client = try wayland.Client.connect(allocator);
+    defer client.deinit();
+
+    const registry = client.request(client.wl_display, .get_registry, .{});
+    var app = App{
+        .client = client,
+        .shm = null,
+        .compositor = null,
+        .wm_base = null,
     };
-    defer connection.close();
-    const conn = connection.connection();
-    const display = connection.getDisplay();
-    const registry = try display.get_registry(conn);
-    const registry_done = try display.sync(conn);
+    client.set_listener(registry, *App, registryListener, &app);
+    try client.roundtrip();
 
-    var globals = Globals{};
-    var globals_ready = false;
-    try conn.setEventListener(registry, *Globals, onRegistryEvent, &globals);
-    try conn.setEventListener(registry_done, *bool, onWlCallbackSetTrue, &globals_ready);
-    while (!globals_ready) {
-        try connection.recv();
+    const compositor = app.compositor orelse return error.NoWlCompositor;
+    const wm_base = app.wm_base orelse return error.NoXdgWmBase;
+
+    var surface_ctx = try createSurface(client, &app, compositor, wm_base);
+    defer destroySurface(client, &surface_ctx);
+
+    client.set_listener(surface_ctx.xdg_surface, *SurfaceCtx, xdgSurfaceListener, &surface_ctx);
+    client.set_listener(surface_ctx.xdg_toplevel, *SurfaceCtx, xdgToplevelListener, &surface_ctx);
+
+    client.request(surface_ctx.wl_surface, .commit, {});
+    flushEvents(client) catch {};
+
+    var poll_fds = [1]std.posix.pollfd{.{ .fd = socket, .events = std.posix.POLL.IN, .revents = 0 }};
+    while (app.running) {
+    flushEvents(client) catch {};
+
+        poll_fds[0].revents = 0;
+        const ready = std.posix.poll(&poll_fds, 200) catch continue;
+        if (ready > 0 and (poll_fds[0].revents & std.posix.POLL.IN) != 0) {
+            handleSocket(socket, &app, &surface_ctx);
+        }
     }
+}
 
-    const compositor = globals.compositor orelse return error.WlCompositorNotFound;
-    const shm = globals.shm orelse return error.WlShmNotFound;
-
-    // Placeholder screen height; in real code, get from wl_output
-    const screen_height: u32 = 1080;
-    const width: u32 = 4;
-    const height: u32 = screen_height;
-
-    // Create surface
-    const surface = try compositor.create_surface(conn);
-    defer surface.destroy(conn);
-
-    // Create shm pool and buffer
-    const size = width * height * 4;
-    const fd = try std.posix.memfd_create("buffer", 0);
-    try std.posix.ftruncate(fd, size);
-    const size_i32 = std.math.cast(i32, size) orelse return error.Overflow;
-    const width_i32 = std.math.cast(i32, width) orelse return error.Overflow;
-    const height_i32 = std.math.cast(i32, height) orelse return error.Overflow;
-    const stride_i32 = std.math.cast(i32, width * 4) orelse return error.Overflow;
-
-    const pool = try shm.create_pool(conn, fd, size_i32);
-    defer pool.destroy(conn);
-    const buffer = try pool.create_buffer(conn, 0, width_i32, height_i32, stride_i32, wayland.wl_shm.Format.argb8888);
-    defer buffer.destroy(conn);
-
-    // Map the buffer
-    const data = try std.posix.mmap(null, size, std.posix.PROT.READ | std.posix.PROT.WRITE, .{ .TYPE = .SHARED }, fd, 0);
-    defer std.posix.munmap(data);
-
-    // z2d setup
-    var surface_z2d = try z2d.Surface.init(.image_surface_rgba, allocator, width, height);
-    defer surface_z2d.deinit();
-
-    var path = z2d.Path.init(allocator);
-    defer path.deinit();
-
-    // Initial draw
-    var value: f32 = 0.0;
-    try drawLine(&surface_z2d, &path, value, height);
-
-    // Copy to buffer
-    const pixels = surface_z2d.image_surface.getPixelsAs([]u32);
-    const data_slice: []u8 = @as([*]u8, @ptrCast(data))[0..size];
-    const pixels_bytes: []const u8 = @as([*]const u8, @ptrCast(pixels.ptr))[0..size];
-    @memcpy(data_slice, pixels_bytes);
-
-    // Attach and commit
-    try surface.attach(conn, buffer, 0, 0);
-    try surface.commit(conn);
-
-    // Event loop (simplified; integrate with Wayland dispatch)
+fn handleSocket(socket: std.posix.socket_t, app: *App, surface_ctx: *SurfaceCtx) void {
     while (true) {
-        // Dispatch Wayland (placeholder)
-        // try shimizu.wl_display.dispatch(display);
-
-        // Check socket
         var client_addr: std.posix.sockaddr.un = undefined;
         var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.un);
-        const client = std.posix.accept(socket, @ptrCast(&client_addr), &addr_len, 0) catch continue;
-        defer std.posix.close(client);
+        const client_fd = std.posix.accept(socket, @ptrCast(&client_addr), &addr_len, std.posix.SOCK.NONBLOCK) catch return;
+        defer std.posix.close(client_fd);
 
-        // Read float
         var buf: [64]u8 = undefined;
-        const len = try std.posix.recv(client, &buf, 0);
-        if (len > 0) {
-            const str = std.mem.trim(u8, buf[0..len], &std.ascii.whitespace);
-            value = std.fmt.parseFloat(f32, str) catch 0.0;
-            value = std.math.clamp(value, 0.0, 1.0);
-        }
+        const len = std.posix.recv(client_fd, &buf, std.posix.MSG.DONTWAIT) catch continue;
+        if (len == 0) continue;
 
-        // Update drawing
-        try drawLine(&surface_z2d, &path, value, height);
-        const data_slice2: []u8 = @as([*]u8, @ptrCast(data))[0..size];
-        const pixels_bytes2: []const u8 = @as([*]const u8, @ptrCast(pixels.ptr))[0..size];
-        @memcpy(data_slice2, pixels_bytes2);
-
-        // Commit
-        try surface.attach(conn, buffer, 0, 0);
-        try surface.commit(conn);
+        const trimmed = std.mem.trim(u8, buf[0..len], &std.ascii.whitespace);
+        const parsed = std.fmt.parseFloat(f32, trimmed) catch continue;
+        app.value = std.math.clamp(parsed, 0.0, 1.0);
+        drawAndCommit(app, surface_ctx) catch {};
     }
 }
 
-const Globals = struct {
-    compositor: ?wayland.wl_compositor = null,
-    shm: ?wayland.wl_shm = null,
-};
-
-fn bindGlobal(conn: shimizu.Connection, registry: wayland.wl_registry, global: wayland.wl_registry.Event.Global, comptime T: type) !T {
-    return try registry.bind(conn, global.name, T.NAME, T.VERSION);
+fn drawAndCommit(app: *App, surface_ctx: *SurfaceCtx) !void {
+    const client = app.client;
+    const shm = app.shm orelse return error.NoWlShm;
+    const buf = try Buffer.get(client, shm, app.width, app.height);
+    drawLine(buf.mem(), app.width, app.height, app.value);
+    client.request(surface_ctx.wl_surface, .attach, .{ .buffer = buf.wl_buffer, .x = 0, .y = 0 });
+    client.request(surface_ctx.wl_surface, .damage, .{
+        .x = 0,
+        .y = 0,
+        .width = std.math.maxInt(i32),
+        .height = std.math.maxInt(i32),
+    });
+    client.request(surface_ctx.wl_surface, .commit, {});
+    flushEvents(client) catch {};
 }
 
-fn onRegistryEvent(globals: *Globals, conn: shimizu.Connection, registry: wayland.wl_registry, event: wayland.wl_registry.Event) !void {
+fn drawLine(buf: []align(4) u8, width: u32, height: u32, value: f32) void {
+    const data_u32: []u32 = std.mem.bytesAsSlice(u32, buf);
+    const line_height = @min(height, @as(u32, @intFromFloat(@ceil(value * @as(f32, @floatFromInt(height))))));
+    const start_row: u32 = if (line_height > 0) height - line_height else height;
+    for (data_u32) |*px| px.* = 0x00000000;
+    for (@as(usize, start_row)..@as(usize, height)) |y| {
+        const base = y * @as(usize, @intCast(width));
+        for (0..width) |x| {
+            data_u32[base + @as(usize, x)] = 0xFFFFFFFF;
+        }
+    }
+}
+
+fn createSurface(client: *wayland.Client, app: *App, compositor: wl.Compositor, wm_base: xdg.WmBase) !SurfaceCtx {
+    const wl_surface = client.request(compositor, .create_surface, .{});
+    const xdg_surface = client.request(wm_base, .get_xdg_surface, .{ .surface = wl_surface });
+    const xdg_toplevel = client.request(xdg_surface, .get_toplevel, .{});
+    client.request(xdg_toplevel, .set_title, .{ .title = "zlinestatus" });
+    client.request(xdg_toplevel, .set_min_size, .{ .width = @intCast(app.width), .height = @intCast(app.height) });
+    return .{
+        .app = app,
+        .wl_surface = wl_surface,
+        .xdg_surface = xdg_surface,
+        .xdg_toplevel = xdg_toplevel,
+    };
+}
+
+fn destroySurface(client: *wayland.Client, surf: *SurfaceCtx) void {
+    client.request(surf.xdg_toplevel, .destroy, {});
+    client.request(surf.xdg_surface, .destroy, {});
+    client.request(surf.wl_surface, .destroy, {});
+}
+
+fn flushEvents(client: *wayland.Client) !void {
+    client.connection.send();
+    client.connection.recv();
+    try client.connection.loop.run(.no_wait);
+}
+
+fn registryListener(client: *wayland.Client, registry: wl.Registry, event: wl.Registry.Event, ctx: *App) void {
     switch (event) {
         .global => |global| {
-            if (shimizu.globalMatchesInterface(global, wayland.wl_compositor)) {
-                globals.compositor = try bindGlobal(conn, registry, global, wayland.wl_compositor);
-            } else if (shimizu.globalMatchesInterface(global, wayland.wl_shm)) {
-                globals.shm = try bindGlobal(conn, registry, global, wayland.wl_shm);
+            if (std.mem.orderZ(u8, global.interface, wl.Compositor.interface.name) == .eq) {
+                ctx.compositor = client.bind(registry, global.name, wl.Compositor, 1);
+            } else if (std.mem.orderZ(u8, global.interface, wl.Shm.interface.name) == .eq) {
+                ctx.shm = client.bind(registry, global.name, wl.Shm, 1);
+            } else if (std.mem.orderZ(u8, global.interface, xdg.WmBase.interface.name) == .eq) {
+                ctx.wm_base = client.bind(registry, global.name, xdg.WmBase, 1);
             }
         },
+        .global_remove => {},
+    }
+}
+
+fn xdgSurfaceListener(client: *wayland.Client, xdg_surface: xdg.Surface, event: xdg.Surface.Event, surf: *SurfaceCtx) void {
+    switch (event) {
+        .configure => |configure| {
+            client.request(xdg_surface, .ack_configure, .{ .serial = configure.serial });
+            drawAndCommit(surf.app, surf) catch {};
+        },
+    }
+}
+
+fn xdgToplevelListener(_: *wayland.Client, _: xdg.Toplevel, event: xdg.Toplevel.Event, surf: *SurfaceCtx) void {
+    switch (event) {
+        .configure => |configure| {
+            if (configure.width > 0) surf.app.width = @intCast(configure.width);
+            if (configure.height > 0) surf.app.height = @intCast(configure.height);
+        },
+        .close => surf.app.running = false,
         else => {},
     }
 }
 
-fn onWlCallbackSetTrue(flag: *bool, _: shimizu.Connection, _: wayland.wl_callback, _: wayland.wl_callback.Event) !void {
-    flag.* = true;
-}
-
-fn drawLine(surface: *z2d.Surface, path: *z2d.Path, value: f32, max_height: u32) !void {
-    const draw_height = @as(u32, @intFromFloat(@as(f32, @floatFromInt(max_height)) * value));
-    path.clear();
-    try path.addRectangle(0, max_height - draw_height, 4, draw_height);
-    surface.clear(0x00000000); // transparent
-    surface.fill(path, 0xFFFFFFFF); // white
+test "drawLine fills bottom rows" {
+    var buf: [16 * 4]u8 align(4) = undefined; // width 4, height 4
+    drawLine(buf[0..], 4, 4, 0.5);
+    const data = std.mem.bytesAsSlice(u32, buf[0..]);
+    try std.testing.expectEqual(@as(u32, 0xFFFFFFFF), data[2 * 4]);
+    try std.testing.expectEqual(@as(u32, 0x00000000), data[0]);
 }
