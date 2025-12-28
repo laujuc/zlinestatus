@@ -76,12 +76,10 @@ pub const Argument = union(enum) {
             .string => |inner| {
                 try writer.writeInt(u32, @intCast(inner.len + 1), .little);
                 try writer.writeAll(inner);
-                std.debug.print("self.le {} {}\n", .{ self.len(), inner.len });
                 try writer.splatByteAll(0, self.len() - (4 + inner.len));
             },
             .fd => {},
             else => {
-                std.debug.print("arg {}", .{self});
                 unreachable;
             },
         }

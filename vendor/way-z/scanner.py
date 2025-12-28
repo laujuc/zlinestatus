@@ -15,7 +15,7 @@ import io
 @dataclass(slots=True)
 class Zig:
     def zig_it(self) -> str:
-        raise NotImplemented()
+        raise NotImplementedError()
 
 
 @dataclass(slots=True)
@@ -35,12 +35,12 @@ class ZigAssignment(Zig):
 
 @dataclass(slots=True)
 class ZigUnion(Zig):
-    class Varinat(NamedTuple):
+    class Variant(NamedTuple):
         name: str
         payload: Zig | None
         doc_comment: str | None = None
 
-    variants: list[Varinat]
+    variants: list[Variant]
     extra: list[Zig] = field(default_factory=list)
 
     def zig_it(self) -> str:
@@ -174,10 +174,10 @@ def title_case(txt: str) -> str:
     return ''.join(w.capitalize() for w in txt.split('_'))
 
 
-def emit_comment(description: str | None, fd: TextIO, commment_type: str = '///'):
+def emit_comment(description: str | None, fd: TextIO, comment_type: str = '///'):
     if description:
         for line in description.strip().splitlines():
-            fd.write(f'\n{commment_type} {line.strip()}')
+            fd.write(f'\n{comment_type} {line.strip()}')
         fd.write('\n')
 
 
@@ -317,9 +317,9 @@ class Request:
     def __str__(self):
         return '{}.{}'.format(self.interface.name, self.name)
 
-    def zig_union_variant(self) -> ZigUnion.Varinat:
+    def zig_union_variant(self) -> ZigUnion.Variant:
         zig_struct = ZigStruct([arg.zig_struct_field() for arg in self.args])
-        return ZigUnion.Varinat(
+        return ZigUnion.Variant(
             name=self.name,
             payload=zig_struct if zig_struct.fields else None,
             doc_comment=self.description,
@@ -454,9 +454,9 @@ class Event:
     def __str__(self):
         return '{}::{}'.format(self.interface, self.name)
 
-    def zig_union_variant(self) -> ZigUnion.Varinat:
+    def zig_union_variant(self) -> ZigUnion.Variant:
         zig_struct = ZigStruct([arg.zig_struct_field() for arg in self.args if arg.type != 'new_id'])
-        return ZigUnion.Varinat(
+        return ZigUnion.Variant(
             name=self.name,
             payload=zig_struct if zig_struct.fields else None,
             doc_comment=self.description,
