@@ -1,5 +1,4 @@
 const std = @import("std");
-const shimizu = @import("shimizu");
 const z2d = @import("z2d");
 
 pub fn main() !void {
@@ -120,3 +119,4 @@ fn drawLine(surface: *z2d.Surface, path: *z2d.Path, value: f32, max_height: u32)
     surface.clear(0x00000000); // transparent
     surface.fill(path, 0xFFFFFFFF); // white
 }
+

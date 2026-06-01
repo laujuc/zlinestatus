@@ -1,0 +1,28 @@
+.{
+    .name = .shimizu,
+    .fingerprint = 0x4b9c467d51ccb78a,
+    .version = "0.1.1",
+    .minimum_zig_version = "0.15.0",
+    .dependencies = .{
+        .wayland = .{
+            .url = "git+https://codeberg.org/klaji/wayland?ref=1.23.1#a9fec8dd65977c57f4039ced34327204d9b9d779",
+            .hash = "N-V-__8AAJC3GAC2LeGXShVNoV0oWVW9T293JVzmx0kY5KVa",
+        },
+        .@"wayland-protocols" = .{
+            .url = "git+https://codeberg.org/klaji/wayland-protocols?ref=1.41#71da8bd7f9fd3ea7c5d87ad19ca087eeca137673",
+            .hash = "N-V-__8AAKVpDQArujwc7m_Z--ypCGFKQ4yb10QdjR99hoEf",
+        },
+        .xml = .{
+            .url = "git+https://github.com/ianprime0509/zig-xml.git?ref=zig-0.15#4ecd15443c100a9b6b083e93739a7d7c3ade2967",
+            .hash = "xml-0.1.0-ZTbP36goAgCTL5kYRoBLW9zxW_7b1aF1GyqgIj80qj1D",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "LICENSE",
+        "README.md",
+        "wayland-protocols",
+    },
+}

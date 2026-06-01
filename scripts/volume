@@ -1,0 +1,37 @@
+#!/usr/bin/execlineb -P
+importas -D volume TYPE 1
+importas -D zsendvalue ZSENDVALUE 2
+
+pipeline { pactl subscribe }
+awk -v type="${TYPE}" -v zsend="${ZSENDVALUE}" '
+function send_volume(    cmd, vol_line, mute_line, vol, level) {
+    vol = 0
+    cmd = "pactl get-sink-volume @DEFAULT_SINK@"
+    if ((cmd | getline vol_line) > 0) {
+        if (match(vol_line, /[0-9]+%/)) {
+            vol = substr(vol_line, RSTART, RLENGTH - 1) + 0
+        }
+    }
+    close(cmd)
+
+    cmd = "pactl get-sink-mute @DEFAULT_SINK@"
+    mute_line = "Mute: no"
+    cmd | getline mute_line
+    close(cmd)
+    mute_line = tolower(mute_line)
+
+    if (index(mute_line, "yes") > 0) {
+        system(zsend " -type " type " " vol " muted")
+        return
+    }
+
+    if (vol <= 30) level = "low"
+    else if (vol <= 70) level = "medium"
+    else level = "high"
+
+    system(zsend " -type " type " " vol " unmuted " level)
+}
+
+BEGIN { send_volume() }
+/on sink|on server/ { send_volume() }
+'

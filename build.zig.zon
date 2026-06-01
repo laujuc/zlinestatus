@@ -2,7 +2,7 @@
     .name = .zlinestatus,
     .version = "0.0.1",
     .fingerprint = 0x9a3c7deebebc770e,
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.15.1",
     .paths = .{
         "",
     },
@@ -10,10 +10,6 @@
         .shimizu = .{
             .url = "git+https://git.klaji.dev/klaji/shimizu?ref=0.1.1#ded824ed136179ef5fd0d49a0138d02ef7fbd755",
             .hash = "shimizu-0.1.1-irfMUUAwBAD8QD5BxR2ojneUIYRA5-LbOgGRcuXQzZXj",
-        },
-        .z2d = .{
-            .url = "git+https://github.com/vancluever/z2d?ref=v0.9.0#b6bcfff686440b4de336cac37ab2bc8197291952",
-            .hash = "z2d-0.9.0-j5P_Hu-WFgA_JEfRpiFss6gdvcvS47cgOc0Via2eKD_T",
         },
     },
 }

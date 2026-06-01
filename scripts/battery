@@ -1,0 +1,36 @@
+#!/bin/execlineb -P
+
+backtick -n WAIT_RAW {
+    ifthenelse { test -r cfg/WAIT }
+        { head -n 1 cfg/WAIT }
+        { echo 5 }
+}
+importas -D 5 WAIT WAIT_RAW
+
+ifthenelse { test -r /sys/class/power_supply/BAT0/capacity }
+{
+    ifthenelse { test -r /sys/class/power_supply/BAT0/status }
+    {
+        backtick -n CAP_RAW { head -n 1 /sys/class/power_supply/BAT0/capacity }
+        importas -D 0 CAP CAP_RAW
+
+        backtick -n STATUS_RAW {
+            pipeline { head -n 1 /sys/class/power_supply/BAT0/status }
+            tr "[:upper:] " "[:lower:]-"
+        }
+        importas -D discharging STATUS STATUS_RAW
+
+        ifthenelse { test "${STATUS}" = charging }
+            { zsendvalue -type battery "${CAP}" charging battery ac }
+            {
+                ifthenelse { test "${STATUS}" = full }
+                    { zsendvalue -type battery "${CAP}" charging battery ac }
+                    { zsendvalue -type battery "${CAP}" discharging battery }
+            }
+    }
+    { zsendvalue -type battery 0 ac }
+}
+{ zsendvalue -type battery 0 ac }
+
+foreground { sleep "${WAIT}" }
+exec ./scripts/battery

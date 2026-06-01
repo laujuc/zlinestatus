@@ -5,7 +5,14 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const shimizu_dep = b.dependency("shimizu", .{});
-    const z2d_dep = b.dependency("z2d", .{});
+    const wlr_layer_shell_mod = b.createModule(.{
+        .root_source_file = b.path("src/generated/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "wire", .module = shimizu_dep.module("wire") },
+        },
+    });
 
     const zlinestatus_mod = b.createModule(.{
         .root_source_file = b.path("src/zlinestatus.zig"),
@@ -13,7 +20,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "shimizu", .module = shimizu_dep.module("shimizu") },
-            .{ .name = "z2d", .module = z2d_dep.module("z2d") },
+            .{ .name = "wlr-layer-shell", .module = wlr_layer_shell_mod },
         },
     });
     const zlinestatus_exe = b.addExecutable(.{

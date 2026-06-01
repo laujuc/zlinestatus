@@ -1,0 +1,43 @@
+#!/usr/bin/execlineb -P
+importas -D 2 INTERVAL 1
+importas -D brightness TYPE 2
+importas -D zsendvalue ZSENDVALUE 3
+
+loopwhile {
+    backtick -n BACKLIGHT_DIR {
+        pipeline {
+            find /sys/class/backlight -mindepth 1 -maxdepth 1 -type d
+        }
+        head -n 1
+    }
+
+    ifthenelse { test -n "${BACKLIGHT_DIR}" }
+    {
+        multisubstitute {
+            backtick -n CURRENT { cat ${BACKLIGHT_DIR}/brightness }
+            backtick -n MAX { cat ${BACKLIGHT_DIR}/max_brightness }
+        }
+
+        ifthenelse { test ${MAX} -gt 0 }
+        {
+            multisubstitute {
+                backtick -n PERCENT_RAW { expr ${CURRENT} \* 100 / ${MAX} }
+                backtick -n PERCENT {
+                    ifthenelse { test ${PERCENT_RAW} -gt 100 } { echo 100 } { echo ${PERCENT_RAW} }
+                }
+            }
+
+            ifthenelse { test ${PERCENT} -le 25 }
+                { ${ZSENDVALUE} -type ${TYPE} ${PERCENT} low }
+                {
+                    ifthenelse { test ${PERCENT} -le 70 }
+                        { ${ZSENDVALUE} -type ${TYPE} ${PERCENT} medium }
+                        { ${ZSENDVALUE} -type ${TYPE} ${PERCENT} high }
+                }
+        }
+        { ${ZSENDVALUE} -type ${TYPE} 0 unavailable }
+    }
+    { ${ZSENDVALUE} -type ${TYPE} 0 unavailable }
+
+    foreground { sleep ${INTERVAL} }
+}

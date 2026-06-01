@@ -1,0 +1,31 @@
+#!/usr/bin/execlineb -P
+importas -D 5 INTERVAL 1
+importas -D wifi TYPE 2
+importas -D zsendvalue ZSENDVALUE 3
+
+loopwhile {
+    backtick -n QUALITY {
+        awk 'NR > 2 { gsub("\\.", "", $3); print $3; exit }' /proc/net/wireless
+    }
+
+    ifthenelse { test -n "${QUALITY}" }
+    {
+        multisubstitute {
+            backtick -n PERCENT_RAW { expr ${QUALITY} \* 100 / 70 }
+            backtick -n PERCENT {
+                ifthenelse { test ${PERCENT_RAW} -gt 100 } { echo 100 } { echo ${PERCENT_RAW} }
+            }
+        }
+
+        ifthenelse { test ${PERCENT} -le 30 }
+            { ${ZSENDVALUE} -type ${TYPE} ${PERCENT} connected weak }
+            {
+                ifthenelse { test ${PERCENT} -le 65 }
+                    { ${ZSENDVALUE} -type ${TYPE} ${PERCENT} connected medium }
+                    { ${ZSENDVALUE} -type ${TYPE} ${PERCENT} connected strong }
+            }
+    }
+    { ${ZSENDVALUE} -type ${TYPE} 0 disconnected }
+
+    foreground { sleep ${INTERVAL} }
+}

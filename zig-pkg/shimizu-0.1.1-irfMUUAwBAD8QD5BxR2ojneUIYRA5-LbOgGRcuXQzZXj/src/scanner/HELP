@@ -1,0 +1,50 @@
+Usage: {[command]s} <protocol xmls>... [options] -o <output directory>
+
+OPTIONS
+  -o, --output <directory>
+
+    The directory to generate protocol.zig files into.
+
+    Each protocol.xml file specified will have it's interfaces generated into a
+    zig file with a matching name. For example, `wayland.xml` would become
+    `wayland.zig`.
+
+    In addition, a file importing all of the generated protocols named `root.zig`
+    will be created. You should use this file as the `root_source_file` of
+    module.
+
+  --compat-output <file>
+
+    The path to generate a libwayland compatible protocol.zig file into.
+
+  --interface-version <interface name> <version>
+
+    Target a specific version of an interface.
+
+  --import <protocol.xml> <import>
+
+    Specify the path to import an already generated protocol xml.
+
+    This is directly used to generate import statements, and will look
+    something like the following:
+
+        @import("zig_module").path.to.protocol
+
+    Wayland XML files are not namespaced, so the only way to know where an
+    interface comes from is to check each protocol XML.
+
+TLDR
+
+  Generate zig protocol definitions from xml protocol definitions:
+
+      {[command]s} protocol1.xml protocol2.xml ... -o path/to/output_directory/
+
+  Limit an interface to a specific version:
+
+      {[command]s} protocol.xml --interface-version interface version -o path/to/output_directory/
+
+  Import an already generated protocol:
+
+      {[command]s} protocol.xml --import path/to/previous_protocol.xml @import("zig_module").and.path -o path/to/output_directory/
+
+

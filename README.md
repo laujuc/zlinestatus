@@ -1,6 +1,6 @@
 # zlinestatus
 
-A Zig program that draws a vertical line on the screen (4 pixels wide, screen height tall) using the Shimizu library for Wayland and z2d for 2D graphics. The line's height is updated based on a value (0.0 to 1.0) received via a Unix socket in `XDG_RUNTIME_DIR`.
+A Zig Wayland client that draws a thin status line and updates its length/color from values received over a Unix socket in `XDG_RUNTIME_DIR`.
 
 ## Building
 
@@ -11,29 +11,120 @@ A Zig program that draws a vertical line on the screen (4 pixels wide, screen he
 ## Usage
 
 ### zlinestatus
-Run the main program with a type to distinguish instances:
+Run the main program with a type to distinguish instances. You can optionally set orientation and alignment:
 
 ```
-zig build run-zlinestatus -- -type mytype
+zig build run-zlinestatus -- -type mytype -orientation horizontal -alignment right
 ```
 
 This creates a socket at `$XDG_RUNTIME_DIR/zlinestatus-mytype.sock` and draws the line.
 
 ### zsendvalue
-Send a value to update the line:
+Send a percentage (and optional state tags) to update the line:
 
 ```
-zig build run-zsendvalue -- -type mytype 0.75
+zig build run-zsendvalue -- -type mytype 75 discharging low
 ```
 
-This sends `0.75` to the socket, updating the line to 75% of screen height.
+This sends `75` and the states `discharging,low` to the socket.  
+The receiver accepts both `0.0..1.0` and `0..100` values for percentage.
+
+## Per-type color configuration
+
+Color rules are loaded from:
+
+- `$XDG_CONFIG_HOME/zlinestatus/<type>.conf`
+- or `~/.config/zlinestatus/<type>.conf` if `XDG_CONFIG_HOME` is not set.
+
+Format: one `key=value` per line.
+
+- `default` or `default_color` sets fallback color
+- any other key is a state or state-combination (`+`, `,` or spaces separate states)
+- value is `#RRGGBB` or `#RRGGBBAA`
+
+Example `~/.config/zlinestatus/battery.conf`:
+
+```
+default=#FFFFFF
+discharging=#D08770
+charging=#A3BE8C
+ac=#88C0D0
+critical=#BF616A
+low=#EBCB8B
+medium=#EBCB8B
+almost-full=#A3BE8C
+full=#8FBCBB
+charging+ac=#5E81AC
+discharging+critical=#BF616A
+```
+
+Rule matching uses active states from the socket message; the most specific matching rule wins.
+
+## Battery polling script (execline)
+
+An execline script is available at:
+
+- `scripts/battery`
+
+It polls `/sys/class/power_supply` and sends:
+
+- percentage (from `/sys/class/power_supply/BAT0/capacity`)
+- only these states: `discharging`, `charging`, `battery`, `ac`
+
+Usage:
+
+```bash
+scripts/battery
+```
+
+Examples:
+
+```bash
+scripts/battery
+```
+
+`cfg/WAIT` controls the poll interval and should contain one integer number of seconds.
+
+## s6 service example
+
+A ready-to-use `run` script is included:
+
+- `scripts/s6/battery/run`
+
+From `scripts/s6/battery`, make it executable and run under `s6-supervise`/`s6-svscan` as usual.
+
+## Additional status scripts (execline)
+
+These scripts send values/states to `zsendvalue`:
+
+- `scripts/wifi` — polls WLAN signal quality from `/proc/net/wireless`
+- `scripts/brightness` — polls display brightness from `/sys/class/backlight/*`
+- `scripts/volume` — listens for PulseAudio/PipeWire volume changes via `pactl subscribe`
+
+Usage:
+
+```bash
+scripts/wifi [interval_seconds] [type] [zsendvalue_command]
+scripts/brightness [interval_seconds] [type] [zsendvalue_command]
+scripts/volume [type] [zsendvalue_command]
+```
+
+Examples:
+
+```bash
+scripts/wifi 5 wifi ./zig-out/bin/zsendvalue
+scripts/brightness 2 brightness ./zig-out/bin/zsendvalue
+scripts/volume volume ./zig-out/bin/zsendvalue
+```
 
 ## Dependencies
-- Shimizu (Wayland protocol)
-- z2d (2D graphics)
-
-Update hashes in `build.zig.zon` after fetching.
+- `shimizu` (Wayland protocol bindings)
+- Compositor support for `wlr-layer-shell-unstable-v1` (for example niri, sway, Hyprland)
 
 ## Notes
-- Wayland setup is simplified; enhance for production (e.g., proper event handling, output size detection).
-- Assumes ARGB8888 buffer format.
+- `zlinestatus` and `zsendvalue` communicate over Unix domain sockets:
+  `$XDG_RUNTIME_DIR/zlinestatus-<type>.sock`.
+- If no config file/rule matches, the line defaults to white.
+- The surface role is layer-shell (top layer), not an `xdg_toplevel` window.
+- Orientation values: `horizontal`, `vertical`.
+- Alignment values: `left`, `right`, `center`.
