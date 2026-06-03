@@ -1,36 +1,46 @@
-#!/bin/execlineb -P
+#!/bin/sh
 
-backtick -n WAIT_RAW {
-    ifthenelse { test -r cfg/WAIT }
-        { head -n 1 cfg/WAIT }
-        { echo 5 }
+set -eu
+
+wait_seconds=5
+if [ -r cfg/WAIT ]; then
+    wait_seconds=$(head -n 1 cfg/WAIT)
+fi
+
+find_battery_dir() {
+    for dir in /sys/class/power_supply/BAT*; do
+        if [ -r "$dir/capacity" ]; then
+            printf '%s\n' "$dir"
+            return 0
+        fi
+    done
+    return 1
 }
-importas -D 5 WAIT WAIT_RAW
 
-ifthenelse { test -r /sys/class/power_supply/BAT0/capacity }
-{
-    ifthenelse { test -r /sys/class/power_supply/BAT0/status }
-    {
-        backtick -n CAP_RAW { head -n 1 /sys/class/power_supply/BAT0/capacity }
-        importas -D 0 CAP CAP_RAW
+while :; do
+    battery_dir=$(find_battery_dir || true)
 
-        backtick -n STATUS_RAW {
-            pipeline { head -n 1 /sys/class/power_supply/BAT0/status }
-            tr "[:upper:] " "[:lower:]-"
-        }
-        importas -D discharging STATUS STATUS_RAW
+    if [ -n "${battery_dir}" ] && [ -r "$battery_dir/status" ]; then
+        capacity=$(head -n 1 "$battery_dir/capacity")
+        status=$(head -n 1 "$battery_dir/status" | tr '[:upper:] ' '[:lower:]-')
 
-        ifthenelse { test "${STATUS}" = charging }
-            { zsendvalue -type battery "${CAP}" charging battery ac }
-            {
-                ifthenelse { test "${STATUS}" = full }
-                    { zsendvalue -type battery "${CAP}" charging battery ac }
-                    { zsendvalue -type battery "${CAP}" discharging battery }
-            }
-    }
-    { zsendvalue -type battery 0 ac }
-}
-{ zsendvalue -type battery 0 ac }
+        case "$status" in
+            charging)
+                zsendvalue -type battery "$capacity" charging battery ac
+                ;;
+            full)
+                zsendvalue -type battery "$capacity" full battery ac
+                ;;
+            discharging)
+                zsendvalue -type battery "$capacity" discharging battery
+                ;;
+            *)
+                zsendvalue -type battery "$capacity" "$status" battery
+                ;;
+        esac
+    else
+        zsendvalue -type battery 0 ac
+    fi
 
-foreground { sleep "${WAIT}" }
-exec ./scripts/battery
+    sleep "$wait_seconds"
+done

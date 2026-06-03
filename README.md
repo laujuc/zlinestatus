@@ -8,13 +8,26 @@ A Zig Wayland client that draws a thin status line and updates its length/color 
 2. Clone the repository.
 3. Run `zig build` to build both executables.
 
+If you use `just`, the repository also includes:
+
+- `just build`
+- `just test`
+- `just install /your/prefix`
+
+The install recipe places:
+
+- `zlinestatus` and `zsendvalue` in `<prefix>/bin`
+- helper scripts in `<prefix>/share/zlinestatus/scripts`
+- the example s6 battery `run` script in `<prefix>/share/zlinestatus/scripts/s6/battery/run`
+- a default `cfg/WAIT` in `<prefix>/share/zlinestatus/cfg/WAIT` if it does not already exist
+
 ## Usage
 
 ### zlinestatus
-Run the main program with a type to distinguish instances. You can optionally set orientation and alignment:
+Run the main program with a type to distinguish instances. You can optionally set orientation, position, and fill alignment:
 
 ```
-zig build run-zlinestatus -- -type mytype -orientation horizontal -alignment right
+zig build run-zlinestatus -- -type mytype -orientation horizontal -position bottom -alignment right
 ```
 
 This creates a socket at `$XDG_RUNTIME_DIR/zlinestatus-mytype.sock` and draws the line.
@@ -66,10 +79,10 @@ An execline script is available at:
 
 - `scripts/battery`
 
-It polls `/sys/class/power_supply` and sends:
+It polls the first battery exposed under `/sys/class/power_supply/BAT*` and sends:
 
-- percentage (from `/sys/class/power_supply/BAT0/capacity`)
-- only these states: `discharging`, `charging`, `battery`, `ac`
+- percentage (from that battery's `capacity`)
+- state tags such as `discharging`, `charging`, `full`, `battery`, `ac`
 
 Usage:
 
@@ -127,4 +140,5 @@ scripts/volume volume ./zig-out/bin/zsendvalue
 - If no config file/rule matches, the line defaults to white.
 - The surface role is layer-shell (top layer), not an `xdg_toplevel` window.
 - Orientation values: `horizontal`, `vertical`.
-- Alignment values: `left`, `right`, `center`.
+- Position values depend on orientation: `horizontal` allows `top` or `bottom`, `vertical` allows `left` or `right`.
+- Alignment values: `left`, `right`, `center` and control horizontal fill placement inside the line.

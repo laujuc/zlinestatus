@@ -20,10 +20,34 @@ const Alignment = enum {
     center,
 };
 
+const Position = enum {
+    top,
+    bottom,
+    left,
+    right,
+};
+
 const Config = struct {
     type_arg: []const u8,
     orientation: Orientation = .horizontal,
     alignment: Alignment = .center,
+    position: ?Position = null,
+
+    fn resolvedPosition(self: Config) !Position {
+        if (self.position) |position| {
+            if (isPositionAllowed(self.orientation, position)) return position;
+            return error.InvalidArgs;
+        }
+
+        return switch (self.orientation) {
+            .horizontal => .top,
+            .vertical => switch (self.alignment) {
+                .left => .left,
+                .right => .right,
+                .center => .left,
+            },
+        };
+    }
 };
 
 const ColorRule = struct {
@@ -68,11 +92,12 @@ pub fn main() !void {
     defer std.process.argsFree(allocator, args);
     const config = parseArgs(args) catch {
         std.debug.print(
-            "Usage: zlinestatus -type <type> [-orientation horizontal|vertical] [-alignment left|right|center]\n",
+            "Usage: zlinestatus -type <type> [-orientation horizontal|vertical] [-position top|bottom|left|right] [-alignment left|right|center]\n",
             .{},
         );
         return error.InvalidArgs;
     };
+    const position = try config.resolvedPosition();
 
     const xdg_runtime_dir = std.posix.getenv("XDG_RUNTIME_DIR") orelse return error.NoXdgRuntimeDir;
     const socket_path = try std.fmt.allocPrint(allocator, "{s}/zlinestatus-{s}.sock", .{ xdg_runtime_dir, config.type_arg });
@@ -131,8 +156,8 @@ pub fn main() !void {
         .horizontal => {
             try layer_surface.set_size(&connection.connection, 0, line_thickness);
             try layer_surface.set_anchor(&connection.connection, .{
-                .top = true,
-                .bottom = false,
+                .top = position == .top,
+                .bottom = position == .bottom,
                 .left = true,
                 .right = true,
             });
@@ -142,8 +167,8 @@ pub fn main() !void {
             try layer_surface.set_anchor(&connection.connection, .{
                 .top = true,
                 .bottom = true,
-                .left = config.alignment == .left,
-                .right = config.alignment == .right,
+                .left = position == .left,
+                .right = position == .right,
             });
         },
     }
@@ -166,48 +191,42 @@ pub fn main() !void {
         (if (config.orientation == .vertical) default_height else line_thickness)
     else
         state.height;
-    const framebuffer_byte_size: usize =
-        @as(usize, width) * @as(usize, height) * @sizeOf(Pixel);
+    var swapchain = shimizu.posix.ShmSwapChain{ .wl_shm = wl_shm };
+    defer swapchain.deinit(&connection.connection, allocator);
 
-    const fd = try std.posix.memfd_create("zlinestatus", 0);
-    defer std.posix.close(fd);
-    try std.posix.ftruncate(fd, @intCast(framebuffer_byte_size));
-
-    const memory = try std.posix.mmap(
-        null,
-        framebuffer_byte_size,
-        std.posix.PROT.READ | std.posix.PROT.WRITE,
-        .{ .TYPE = .SHARED },
-        fd,
-        0,
+    try renderFrame(
+        allocator,
+        &connection,
+        &swapchain,
+        wl_surface,
+        width,
+        height,
+        0.0,
+        config.orientation,
+        config.alignment,
+        style.default_color,
     );
-    defer std.posix.munmap(memory);
 
-    const pixels: []Pixel = std.mem.bytesAsSlice(Pixel, memory);
-    const wl_shm_pool = try wl_shm.create_pool(
-        &connection.connection,
-        @enumFromInt(fd),
-        @intCast(framebuffer_byte_size),
-    );
-    defer wl_shm_pool.destroy(&connection.connection) catch {};
+    var poll_fds = [_]std.posix.pollfd{
+        .{ .fd = socket, .events = std.posix.POLL.IN, .revents = 0 },
+        .{ .fd = connection.socket, .events = std.posix.POLL.IN, .revents = 0 },
+    };
+    const err_mask = std.posix.POLL.ERR | std.posix.POLL.NVAL | std.posix.POLL.HUP;
 
-    const wl_buffer = try wl_shm_pool.create_buffer(
-        &connection.connection,
-        0,
-        @intCast(width),
-        @intCast(height),
-        @intCast(width * @sizeOf(Pixel)),
-        .argb8888,
-    );
-    defer wl_buffer.destroy(&connection.connection) catch {};
+    while (!state.closed) {
+        _ = try std.posix.poll(&poll_fds, -1);
 
-    drawPercent(pixels, width, height, 0.0, config.orientation, config.alignment, style.default_color);
-    try wl_surface.attach(&connection.connection, wl_buffer, 0, 0);
-    try wl_surface.damage(&connection.connection, 0, 0, @intCast(width), @intCast(height));
-    try wl_surface.commit(&connection.connection);
-    _ = try connection.flushSendBuffers();
+        if ((poll_fds[1].revents & std.posix.POLL.IN) != 0) {
+            try connection.recv();
+        }
+        if ((poll_fds[1].revents & err_mask) != 0) {
+            return error.WaylandConnectionClosed;
+        }
+        if (state.closed) return error.SurfaceClosed;
 
-    while (true) {
+        if ((poll_fds[0].revents & std.posix.POLL.IN) == 0) continue;
+        if ((poll_fds[0].revents & err_mask) != 0) continue;
+
         var client_addr: std.posix.sockaddr.un = undefined;
         var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.un);
         const client = std.posix.accept(socket, @ptrCast(&client_addr), &addr_len, 0) catch continue;
@@ -221,8 +240,11 @@ pub fn main() !void {
         const parsed = parseIncomingMessage(raw) catch continue;
         const color = pickColorForStates(style, parsed.states());
 
-        drawPercent(
-            pixels,
+        try renderFrame(
+            allocator,
+            &connection,
+            &swapchain,
+            wl_surface,
             width,
             height,
             parsed.percent,
@@ -230,11 +252,43 @@ pub fn main() !void {
             config.alignment,
             color,
         );
-        try wl_surface.attach(&connection.connection, wl_buffer, 0, 0);
-        try wl_surface.damage(&connection.connection, 0, 0, @intCast(width), @intCast(height));
-        try wl_surface.commit(&connection.connection);
-        _ = try connection.flushSendBuffers();
     }
+}
+
+fn renderFrame(
+    allocator: std.mem.Allocator,
+    connection: *shimizu.posix.Connection,
+    swapchain: *shimizu.posix.ShmSwapChain,
+    wl_surface: shimizu.core.wl_surface,
+    width: u32,
+    height: u32,
+    percent: f32,
+    orientation: Orientation,
+    alignment: Alignment,
+    color: Pixel,
+) !void {
+    const framebuffer_byte_size: usize =
+        @as(usize, width) * @as(usize, height) * @sizeOf(Pixel);
+    const stride: usize = @as(usize, width) * @sizeOf(Pixel);
+    const framebuffer_u31 = std.math.cast(u31, framebuffer_byte_size) orelse return error.FrameTooLarge;
+    const stride_u31 = std.math.cast(u31, stride) orelse return error.FrameTooLarge;
+    const mapped = try swapchain.mapBuffer(&connection.connection, allocator, framebuffer_u31);
+    const pixels = std.mem.bytesAsSlice(Pixel, mapped[0..framebuffer_byte_size]);
+
+    drawPercent(pixels, width, height, percent, orientation, alignment, color);
+
+    const wl_buffer = try swapchain.sendBuffer(
+        &connection.connection,
+        mapped,
+        @intCast(width),
+        @intCast(height),
+        stride_u31,
+        .argb8888,
+    );
+    try wl_surface.attach(&connection.connection, wl_buffer, 0, 0);
+    try wl_surface.damage(&connection.connection, 0, 0, @intCast(width), @intCast(height));
+    try wl_surface.commit(&connection.connection);
+    _ = try connection.flushSendBuffers();
 }
 
 fn loadStyleConfig(allocator: std.mem.Allocator, type_arg: []const u8) !StyleConfig {
@@ -329,6 +383,10 @@ fn parseArgs(args: []const []const u8) !Config {
             i += 1;
             if (i >= args.len) return error.InvalidArgs;
             cfg.orientation = parseOrientation(args[i]) orelse return error.InvalidArgs;
+        } else if (std.mem.eql(u8, arg, "-position")) {
+            i += 1;
+            if (i >= args.len) return error.InvalidArgs;
+            cfg.position = parsePosition(args[i]) orelse return error.InvalidArgs;
         } else if (std.mem.eql(u8, arg, "-alignment") or std.mem.eql(u8, arg, "-align")) {
             i += 1;
             if (i >= args.len) return error.InvalidArgs;
@@ -338,6 +396,7 @@ fn parseArgs(args: []const []const u8) !Config {
         }
     }
     if (cfg.type_arg.len == 0) return error.InvalidArgs;
+    _ = try cfg.resolvedPosition();
     return cfg;
 }
 
@@ -352,6 +411,21 @@ fn parseAlignment(raw: []const u8) ?Alignment {
     if (std.mem.eql(u8, raw, "right")) return .right;
     if (std.mem.eql(u8, raw, "center")) return .center;
     return null;
+}
+
+fn parsePosition(raw: []const u8) ?Position {
+    if (std.mem.eql(u8, raw, "top")) return .top;
+    if (std.mem.eql(u8, raw, "bottom")) return .bottom;
+    if (std.mem.eql(u8, raw, "left")) return .left;
+    if (std.mem.eql(u8, raw, "right")) return .right;
+    return null;
+}
+
+fn isPositionAllowed(orientation: Orientation, position: Position) bool {
+    return switch (orientation) {
+        .horizontal => position == .top or position == .bottom,
+        .vertical => position == .left or position == .right,
+    };
 }
 
 fn parseIncomingMessage(raw: []const u8) !ParsedMessage {
@@ -514,4 +588,88 @@ fn onWlCallbackSetTrue(
     _: shimizu.core.wl_callback.Event,
 ) !void {
     done.* = true;
+}
+
+test "horizontal position accepts top and bottom" {
+    const top_cfg = try parseArgs(&.{
+        "zlinestatus",
+        "-type",
+        "battery",
+        "-orientation",
+        "horizontal",
+        "-position",
+        "top",
+    });
+    try std.testing.expectEqual(Position.top, try top_cfg.resolvedPosition());
+
+    const bottom_cfg = try parseArgs(&.{
+        "zlinestatus",
+        "-type",
+        "battery",
+        "-orientation",
+        "horizontal",
+        "-position",
+        "bottom",
+    });
+    try std.testing.expectEqual(Position.bottom, try bottom_cfg.resolvedPosition());
+}
+
+test "vertical position accepts left and right" {
+    const left_cfg = try parseArgs(&.{
+        "zlinestatus",
+        "-type",
+        "battery",
+        "-orientation",
+        "vertical",
+        "-position",
+        "left",
+    });
+    try std.testing.expectEqual(Position.left, try left_cfg.resolvedPosition());
+
+    const right_cfg = try parseArgs(&.{
+        "zlinestatus",
+        "-type",
+        "battery",
+        "-orientation",
+        "vertical",
+        "-position",
+        "right",
+    });
+    try std.testing.expectEqual(Position.right, try right_cfg.resolvedPosition());
+}
+
+test "position is rejected when incompatible with orientation" {
+    try std.testing.expectError(error.InvalidArgs, parseArgs(&.{
+        "zlinestatus",
+        "-type",
+        "battery",
+        "-orientation",
+        "horizontal",
+        "-position",
+        "left",
+    }));
+
+    try std.testing.expectError(error.InvalidArgs, parseArgs(&.{
+        "zlinestatus",
+        "-type",
+        "battery",
+        "-orientation",
+        "vertical",
+        "-position",
+        "top",
+    }));
+}
+
+test "vertical alignment still selects default side when position is omitted" {
+    const cfg = try parseArgs(&.{
+        "zlinestatus",
+        "-type",
+        "battery",
+        "-orientation",
+        "vertical",
+        "-alignment",
+        "right",
+    });
+
+    try std.testing.expectEqual(Position.right, try cfg.resolvedPosition());
 }

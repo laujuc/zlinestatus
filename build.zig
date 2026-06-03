@@ -41,6 +41,18 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(zsendvalue_exe);
 
+    const zlinestatus_tests = b.addTest(.{
+        .root_module = zlinestatus_mod,
+    });
+    const zsendvalue_tests = b.addTest(.{
+        .root_module = zsendvalue_mod,
+    });
+    const run_zlinestatus_tests = b.addRunArtifact(zlinestatus_tests);
+    const run_zsendvalue_tests = b.addRunArtifact(zsendvalue_tests);
+    const test_step = b.step("test", "Run unit tests");
+    test_step.dependOn(&run_zlinestatus_tests.step);
+    test_step.dependOn(&run_zsendvalue_tests.step);
+
     // Run steps
     const zlinestatus_run_cmd = b.addRunArtifact(zlinestatus_exe);
     zlinestatus_run_cmd.step.dependOn(b.getInstallStep());
