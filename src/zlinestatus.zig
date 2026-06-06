@@ -5,7 +5,7 @@ const wlr_layer_shell = @import("wlr-layer-shell").wlr_layer_shell_unstable_v1;
 const Pixel = [4]u8;
 const TRANSPARENT = Pixel{ 0x00, 0x00, 0x00, 0x00 };
 const OPAQUE_WHITE = Pixel{ 0xFF, 0xFF, 0xFF, 0xFF };
-const line_thickness: u32 = 2;
+const line_thickness: u32 = 3;
 const default_width: u32 = 1920;
 const default_height: u32 = 1080;
 
@@ -522,7 +522,7 @@ fn drawPercent(
                     pixels[row_start + @as(usize, x)] = color;
                 }
             }
-        }
+        },
     }
 }
 
