@@ -1,0 +1,14 @@
+[Unit]
+Description=zlinestatus instance for %i
+After=graphical-session.target
+PartOf=graphical-session.target
+ConditionEnvironment=WAYLAND_DISPLAY
+
+[Service]
+Type=simple
+ExecStart=@prefix@/bin/zlinestatus -type %i
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

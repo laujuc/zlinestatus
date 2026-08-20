@@ -2,6 +2,9 @@
 
 set -eu
 
+battery_type=${1:-battery}
+zsendvalue_command=${ZSENDVALUE:-zsendvalue}
+
 wait_seconds=5
 if [ -r cfg/WAIT ]; then
     wait_seconds=$(head -n 1 cfg/WAIT)
@@ -26,20 +29,20 @@ while :; do
 
         case "$status" in
             charging)
-                zsendvalue -type battery "$capacity" charging battery ac
+                "$zsendvalue_command" -type "$battery_type" "$capacity" charging battery ac
                 ;;
             full)
-                zsendvalue -type battery "$capacity" full battery ac
+                "$zsendvalue_command" -type "$battery_type" "$capacity" full battery ac
                 ;;
             discharging)
-                zsendvalue -type battery "$capacity" discharging battery
+                "$zsendvalue_command" -type "$battery_type" "$capacity" discharging battery
                 ;;
             *)
-                zsendvalue -type battery "$capacity" "$status" battery
+                "$zsendvalue_command" -type "$battery_type" "$capacity" "$status" battery
                 ;;
         esac
     else
-        zsendvalue -type battery 0 ac
+        "$zsendvalue_command" -type "$battery_type" 0 ac
     fi
 
     sleep "$wait_seconds"

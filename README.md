@@ -4,9 +4,15 @@ A Zig Wayland client that draws a thin status line and updates its length/color 
 
 ## Building
 
-1. Ensure Zig is installed.
+1. Install Zig 0.15.2 with `zvm install 0.15.2`. The vendored `shimizu` dependency does not support Zig 0.16 yet.
 2. Clone the repository.
-3. Run `zig build` to build both executables.
+3. Run `just build` to build both executables. The recipes use `zvm run 0.15.2` by default.
+
+If you manage the correct Zig version outside zvm, override the command:
+
+```sh
+ZIG=zig just build
+```
 
 If you use `just`, the repository also includes:
 
@@ -19,6 +25,7 @@ The install recipe places:
 - `zlinestatus` and `zsendvalue` in `<prefix>/bin`
 - helper scripts in `<prefix>/share/zlinestatus/scripts`
 - the example s6 battery `run` script in `<prefix>/share/zlinestatus/scripts/s6/battery/run`
+- systemd user units in `<prefix>/lib/systemd/user`
 - a default `cfg/WAIT` in `<prefix>/share/zlinestatus/cfg/WAIT` if it does not already exist
 
 ## Usage
@@ -73,30 +80,39 @@ discharging+critical=#BF616A
 
 Rule matching uses active states from the socket message; the most specific matching rule wins.
 
-## Battery polling script (execline)
+## Battery status
 
-An execline script is available at:
+The battery helper reads `/sys/class/power_supply/BAT*/capacity` and `status`, then sends the percentage and state tags to `zlinestatus`. It does not require `tail`, `socat`, or manually piping values to `zsendvalue`.
 
-- `scripts/battery`
+### Start automatically with systemd
 
-It polls the first battery exposed under `/sys/class/power_supply/BAT*` and sends:
+After `just install`, reload the user-unit definitions and enable the battery service:
 
-- percentage (from that battery's `capacity`)
-- state tags such as `discharging`, `charging`, `full`, `battery`, `ac`
-
-Usage:
-
-```bash
-scripts/battery
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now zlinestatus-battery.service
 ```
 
-Examples:
+The service starts `zlinestatus -type battery` and the battery helper together. It stops the helper when the renderer stops, and restarts either service after a failure.
+
+The user systemd manager must know the Wayland session environment. Most desktop environments arrange this automatically. For compositors that do not, run this once from compositor startup before enabling the service:
 
 ```bash
-scripts/battery
+systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR
 ```
 
-`cfg/WAIT` controls the poll interval and should contain one integer number of seconds.
+Use a separate `zlinestatus@<type>.service` instance for other manually managed status types.
+
+### Run the helper manually
+
+The helper is available at `scripts/battery`. Its optional first argument sets the status type, and `ZSENDVALUE` can override the sender binary:
+
+```bash
+scripts/battery battery
+ZSENDVALUE=./zig-out/bin/zsendvalue scripts/battery battery
+```
+
+`cfg/WAIT` controls the poll interval and should contain one integer number of seconds. The installed service reads `<prefix>/share/zlinestatus/cfg/WAIT`.
 
 ## s6 service example
 
