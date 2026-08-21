@@ -1,5 +1,8 @@
 # Created by https://www.toptal.com/developers/gitignore/api/zig
-# Edit at https://www.toptal.com/developers/gitignore?templates=zig
+# Edit at .zig-cache/
+
+zig-out/
+*.o
 
 ### zig ###
 # Zig programming language
@@ -11,3 +14,4 @@ build-*/
 docgen_tmp/
 
 # End of https://www.toptal.com/developers/gitignore/api/zig
+

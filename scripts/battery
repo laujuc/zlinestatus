@@ -4,10 +4,17 @@ set -eu
 
 battery_type=${1:-battery}
 zsendvalue_command=${ZSENDVALUE:-zsendvalue}
+wait_seconds=${WAIT:-5}
 
-wait_seconds=5
-if [ -r cfg/WAIT ]; then
-    wait_seconds=$(head -n 1 cfg/WAIT)
+case "$wait_seconds" in
+    ''|*[!0-9]*)
+        printf 'WAIT must be a positive number of seconds\n' >&2
+        exit 1
+        ;;
+esac
+if [ "$wait_seconds" -eq 0 ]; then
+    printf 'WAIT must be a positive number of seconds\n' >&2
+    exit 1
 fi
 
 find_battery_dir() {

@@ -6,7 +6,10 @@ ConditionEnvironment=WAYLAND_DISPLAY
 
 [Service]
 Type=simple
-ExecStart=@prefix@/bin/zlinestatus -type %i
+Environment=ZLINESTATUS=@prefix@/bin/zlinestatus
+Environment=ZSENDVALUE=@prefix@/bin/zsendvalue
+Environment=WAIT=5
+ExecStart=@prefix@/share/zlinestatus/scripts/zlinestatus-instance %i
 Restart=on-failure
 RestartSec=2
 

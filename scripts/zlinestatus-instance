@@ -1,0 +1,71 @@
+#!/bin/sh
+
+set -eu
+
+if [ "$#" -ne 1 ]; then
+    printf 'Usage: zlinestatus-instance <type>\n' >&2
+    exit 1
+fi
+
+type_arg=$1
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+zlinestatus_command=${ZLINESTATUS:-zlinestatus}
+zsendvalue_command=${ZSENDVALUE:-zsendvalue}
+wait_seconds=${WAIT:-5}
+
+cleanup() {
+    trap - EXIT INT TERM
+    kill "$renderer_pid" 2>/dev/null || true
+    if [ -n "${provider_pid:-}" ]; then
+        kill "$provider_pid" 2>/dev/null || true
+    fi
+    wait "$renderer_pid" 2>/dev/null || true
+    if [ -n "${provider_pid:-}" ]; then
+        wait "$provider_pid" 2>/dev/null || true
+    fi
+}
+
+"$zlinestatus_command" -type "$type_arg" &
+renderer_pid=$!
+provider_pid=
+trap cleanup EXIT
+trap 'cleanup; exit 0' INT TERM
+
+case "$type_arg" in
+    battery)
+        "$script_dir/battery" "$type_arg" &
+        provider_pid=$!
+        ;;
+    wifi)
+        "$script_dir/wifi" "$wait_seconds" "$type_arg" "$zsendvalue_command" &
+        provider_pid=$!
+        ;;
+    brightness)
+        "$script_dir/brightness" "$wait_seconds" "$type_arg" "$zsendvalue_command" &
+        provider_pid=$!
+        ;;
+    volume)
+        "$script_dir/volume" "$type_arg" "$zsendvalue_command" &
+        provider_pid=$!
+        ;;
+esac
+
+while :; do
+    if ! kill -0 "$renderer_pid" 2>/dev/null; then
+        if wait "$renderer_pid"; then
+            exit 0
+        else
+            exit $?
+        fi
+    fi
+
+    if [ -n "$provider_pid" ] && ! kill -0 "$provider_pid" 2>/dev/null; then
+        if wait "$provider_pid"; then
+            exit 1
+        else
+            exit $?
+        fi
+    fi
+
+    sleep 1
+done

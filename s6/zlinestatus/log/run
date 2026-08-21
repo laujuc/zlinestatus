@@ -1,0 +1,9 @@
+#!/usr/bin/execlineb -P
+
+s6-envdir ../env
+importas -ui TYPE TYPE
+importas -i RUNTIME_DIR XDG_RUNTIME_DIR
+define LOGDIR ${RUNTIME_DIR}/zlinestatus/${TYPE}
+
+foreground { mkdir -p -m 700 ${LOGDIR} }
+s6-log t ${LOGDIR}

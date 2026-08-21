@@ -16,17 +16,17 @@ ZIG=zig just build
 
 If you use `just`, the repository also includes:
 
-- `just build`
+- `just build` — builds locally into `zig-out/bin`
 - `just test`
-- `just install /your/prefix`
+- `just install /your/prefix` — builds and installs into the specified prefix
+- `PREFIX=/your/prefix just install` — equivalent environment-variable form
 
 The install recipe places:
 
 - `zlinestatus` and `zsendvalue` in `<prefix>/bin`
 - helper scripts in `<prefix>/share/zlinestatus/scripts`
-- the example s6 battery `run` script in `<prefix>/share/zlinestatus/scripts/s6/battery/run`
+- an s6 service template in `<prefix>/share/zlinestatus/s6/zlinestatus`
 - systemd user units in `<prefix>/lib/systemd/user`
-- a default `cfg/WAIT` in `<prefix>/share/zlinestatus/cfg/WAIT` if it does not already exist
 
 ## Usage
 
@@ -80,47 +80,98 @@ discharging+critical=#BF616A
 
 Rule matching uses active states from the socket message; the most specific matching rule wins.
 
-## Battery status
+## Automatic status instances
 
-The battery helper reads `/sys/class/power_supply/BAT*/capacity` and `status`, then sends the percentage and state tags to `zlinestatus`. It does not require `tail`, `socat`, or manually piping values to `zsendvalue`.
+One systemd template starts the renderer and a matching built-in provider. Enable as many instances as needed; no per-status unit files are required:
 
-### Start automatically with systemd
+| Instance | Provider |
+| --- | --- |
+| `zlinestatus@battery.service` | Reads `/sys/class/power_supply/BAT*/capacity` and `status` |
+| `zlinestatus@wifi.service` | Polls `/proc/net/wireless` |
+| `zlinestatus@brightness.service` | Polls `/sys/class/backlight` |
+| `zlinestatus@volume.service` | Listens to PulseAudio/PipeWire events through `pactl` |
+| Any other instance | Starts only the renderer; use `zsendvalue` from your own producer |
 
-After `just install`, reload the user-unit definitions and enable the battery service:
+After `just install`, reload user-unit definitions and enable the instances you need:
 
 ```sh
 systemctl --user daemon-reload
-systemctl --user enable --now zlinestatus-battery.service
+systemctl --user enable --now zlinestatus@battery.service zlinestatus@wifi.service
 ```
-
-The service starts `zlinestatus -type battery` and the battery helper together. It stops the helper when the renderer stops, and restarts either service after a failure.
 
 The user systemd manager must know the Wayland session environment. Most desktop environments arrange this automatically. For compositors that do not, run this once from compositor startup before enabling the service:
 
 ```bash
-systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR
+systemctl --user import-environment WAYLAND_DISPLAY XDG_RUNTIME_DIR PULSE_SERVER
 ```
 
-Use a separate `zlinestatus@<type>.service` instance for other manually managed status types.
+### Change the polling interval
 
-### Run the helper manually
+The template sets `WAIT=5` (seconds) for polling providers. Override it for one instance with a systemd drop-in:
+
+```sh
+systemctl --user edit zlinestatus@battery.service
+```
+
+Add:
+
+```ini
+[Service]
+Environment=WAIT=15
+```
+
+Then apply it:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user restart zlinestatus@battery.service
+```
+
+### Run the battery helper manually
 
 The helper is available at `scripts/battery`. Its optional first argument sets the status type, and `ZSENDVALUE` can override the sender binary:
 
 ```bash
 scripts/battery battery
-ZSENDVALUE=./zig-out/bin/zsendvalue scripts/battery battery
+WAIT=15 ZSENDVALUE=./zig-out/bin/zsendvalue scripts/battery battery
 ```
 
-`cfg/WAIT` controls the poll interval and should contain one integer number of seconds. The installed service reads `<prefix>/share/zlinestatus/cfg/WAIT`.
+`WAIT` must be a positive number of seconds.
 
-## s6 service example
+## s6 user services
 
-A ready-to-use `run` script is included:
+The installed `s6/zlinestatus` directory is a complete service source: it
+starts the renderer and the provider selected by `env/TYPE`. Copy it into
+your writable service-source directory, then edit the environment files:
 
-- `scripts/s6/battery/run`
+```sh
+PREFIX=/usr/local
+SOURCE="$PREFIX/share/zlinestatus/s6/zlinestatus"
+SERVICE="$HOME/.local/share/s6/service/zlinestatus-battery"
 
-From `scripts/s6/battery`, make it executable and run under `s6-supervise`/`s6-svscan` as usual.
+mkdir -p "$SERVICE"
+cp -a "$SOURCE"/. "$SERVICE"/
+printf 'battery\n' > "$SERVICE/env/TYPE"
+printf '5\n' > "$SERVICE/env/WAIT"
+```
+
+To activate it with an already-running user `s6-svscan`, link the service
+source into the scan directory and request a scan:
+
+```sh
+SCANDIR="$HOME/.local/share/s6/scandir"
+ln -s "$SERVICE" "$SCANDIR/zlinestatus-battery"
+s6-svscanctl -a "$SCANDIR"
+s6-svc -wu -u "$SCANDIR/zlinestatus-battery"
+```
+
+Set `env/TYPE` to `wifi`, `brightness`, or `volume` for the built-in
+providers. Any other type starts only the renderer, so external producers can
+send values with `zsendvalue`. `env/ZLINESTATUS`, `env/ZSENDVALUE`, and
+`env/WAIT` override the installed commands and polling interval. Logs are
+written with `s6-log` to `${XDG_RUNTIME_DIR}/zlinestatus/<type>`. The renderer
+does not implement s6 readiness notification, so `s6-svstat -o up,ready`
+reports `true false` when it is running.
 
 ## Additional status scripts (execline)
 
